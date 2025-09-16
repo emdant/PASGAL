@@ -1,7 +1,8 @@
 #include "sssp.h"
+#include "utils.h"
 
-#include <queue>
-#include <type_traits>
+#include <iostream>
+#include <random>
 
 #include "dijkstra.h"
 #include "graph.h"
@@ -13,32 +14,40 @@ typedef float EdgeTy;
 #else
 typedef uint32_t EdgeTy;
 #endif
-constexpr int NUM_SRC = 10;
-constexpr int NUM_ROUND = 5;
+constexpr int NUM_SRC = 1;
+constexpr int NUM_ROUND = 22;
 constexpr int LOG2_WEIGHT = 18;
 constexpr int WEIGHT_RANGE = 1 << LOG2_WEIGHT;
 
 template <class Algo, class Graph, class NodeId = typename Graph::NodeId>
-void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, bool verify, bool dump) {
+void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
+         bool verify, bool dump) {
   double total_time = 0;
   sequence<EdgeTy> dist;
-  for (int i = 0; i <= NUM_ROUND; i++) {
+  for (int i = 0; i < rounds; i++) {
     internal::timer t;
     dist = algo.sssp(s);
     t.stop();
-    if (i == 0) {
-      printf("Warmup Round: %f\n", t.total_time());
-    } else {
-      printf("Round %d: %f\n", i, t.total_time());
-      total_time += t.total_time();
-    }
+    printf("Round %d: %f\n", i, t.total_time());
+    total_time += t.total_time();
   }
   double average_time = total_time / NUM_ROUND;
   printf("Average time: %f\n", average_time);
 
-  ofstream ofs("sssp.tsv", ios_base::app);
-  ofs << s << '\t' << average_time << '\n';
-  ofs.close();
+  auto not_max_cmp = [&](EdgeTy a, EdgeTy b) {
+    if (b == Algo::DIST_MAX)
+      return false;
+    if (a == Algo::DIST_MAX)
+      return true;
+    return a < b;
+  };
+
+  auto not_max = [&](EdgeTy e) { return e != Algo::DIST_MAX; };
+
+  auto longest_distance = *parlay::max_element(dist, not_max_cmp);
+  auto reached = parlay::count_if(dist, not_max);
+  std::cout << "Longest distance: " << longest_distance << std::endl;
+  std::cout << "Nodes reached: " << reached << std::endl;
 
   if (verify) {
     printf("Running verifier...\n");
@@ -58,11 +67,20 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, bool verify, boo
 }
 
 template <class Algo, class Graph>
-void run(Algo &algo, const Graph &G, bool verify, bool dump) {
-  for (int v = 0; v < NUM_SRC; v++) {
-    uint32_t s = hash32(v) % G.n;
+void run(Algo &algo, const Graph &G, int sources, int rounds, bool verify,
+         bool dump) {
+  std::mt19937_64 rng(27491095);
+  UniDist<NodeId, std::mt19937_64> udist(G.n - 1, rng);
+
+  for (int v = 0; v < sources; v++) {
+    NodeId s, deg;
+    do {
+      s = udist();
+      deg = G.offsets[s + 1] - G.offsets[s];
+    } while (deg == 0);
+
     printf("source %d: %-10d\n", v, s);
-    run(algo, G, s, verify, dump);
+    run(algo, G, s, rounds, verify, dump);
   }
 }
 
@@ -70,14 +88,16 @@ int main(int argc, char *argv[]) {
   if (argc == 1) {
     fprintf(stderr,
             "Usage: %s [-i input_file] [-a algorithm] [-p parameter] [-s] [-v] "
-            "[-d]\n"
+            "[-d] [-S sources] [-n trials]\n"
             "Options:\n"
             "\t-i,\tinput file path\n"
             "\t-a,\talgorithm: [rho-stepping] [delta-stepping] [bellman-ford]\n"
             "\t-p,\tparameter(e.g. delta, rho)\n"
             "\t-s,\tsymmetrized input graph\n"
             "\t-v,\tverify result\n"
-            "\t-d,\tdump distances to file\n",
+            "\t-d,\tdump distances to file\n"
+            "\t-S,\tnumber of sources\n"
+            "\t-n,\tnumber of trials per source\n",
             argv[0]);
     return 0;
   }
@@ -89,41 +109,50 @@ int main(int argc, char *argv[]) {
   bool symmetrized = false;
   bool verify = false;
   bool dump = false;
-  while ((c = getopt(argc, argv, "i:a:p:r:svd")) != -1) {
+  int rounds = NUM_ROUND;
+  int sources = NUM_SRC;
+
+  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:")) != -1) {
     switch (c) {
-      case 'i':
-        input_path = optarg;
-        break;
-      case 'a':
-        if (!strcmp(optarg, "rho-stepping")) {
-          algorithm = rho_stepping;
-        } else if (!strcmp(optarg, "delta-stepping")) {
-          algorithm = delta_stepping;
-        } else if (!strcmp(optarg, "bellman-ford")) {
-          algorithm = bellman_ford;
-        } else {
-          std::cerr << "Error: Unknown algorithm " << optarg << std::endl;
-          abort();
-        }
-        break;
-      case 'p':
-        parameter = string(optarg);
-        break;
-      case 'r':
-        source = atol(optarg);
-        break;
-      case 's':
-        symmetrized = true;
-        break;
-      case 'v':
-        verify = true;
-        break;
-      case 'd':
-        dump = true;
-        break;
-      default:
-        std::cerr << "Error: Unknown option " << optopt << std::endl;
+    case 'i':
+      input_path = optarg;
+      break;
+    case 'a':
+      if (!strcmp(optarg, "rho-stepping")) {
+        algorithm = rho_stepping;
+      } else if (!strcmp(optarg, "delta-stepping")) {
+        algorithm = delta_stepping;
+      } else if (!strcmp(optarg, "bellman-ford")) {
+        algorithm = bellman_ford;
+      } else {
+        std::cerr << "Error: Unknown algorithm " << optarg << std::endl;
         abort();
+      }
+      break;
+    case 'p':
+      parameter = string(optarg);
+      break;
+    case 'r':
+      source = atol(optarg);
+      break;
+    case 's':
+      symmetrized = true;
+      break;
+    case 'v':
+      verify = true;
+      break;
+    case 'd':
+      dump = true;
+      break;
+    case 'n':
+      rounds = atoi(optarg);
+      break;
+    case 'S':
+      sources = atoi(optarg);
+      break;
+    default:
+      std::cerr << "Error: Unknown option " << optopt << std::endl;
+      abort();
     }
   }
 
@@ -140,8 +169,9 @@ int main(int argc, char *argv[]) {
     G.generate_random_weight(1, WEIGHT_RANGE);
   }
 
-  fprintf(stdout, "Running on %s: |V|=%zu, |E|=%zu, num_src=%d, num_round=%d\n",
-          input_path, G.n, G.m, NUM_SRC, NUM_ROUND);
+  fprintf(stdout,
+          "Running on %s: |V|=%zu, |E|=%zu, num_src=%d, num_round=%d\n\n",
+          input_path, G.n, G.m, sources, rounds);
 
   if (algorithm == rho_stepping) {
     size_t rho = 1 << 20;
@@ -151,9 +181,9 @@ int main(int argc, char *argv[]) {
     }
     Rho_Stepping solver(G, rho);
     if (source == UINT_MAX) {
-      run(solver, G, verify, dump);
+      run(solver, G, sources, rounds, verify, dump);
     } else {
-      run(solver, G, source, verify, dump);
+      run(solver, G, source, rounds, verify, dump);
     }
   } else if (algorithm == delta_stepping) {
     EdgeTy delta = 1 << 15;
@@ -166,16 +196,16 @@ int main(int argc, char *argv[]) {
     }
     Delta_Stepping solver(G, delta);
     if (source == UINT_MAX) {
-      run(solver, G, verify, dump);
+      run(solver, G, sources, rounds, verify, dump);
     } else {
-      run(solver, G, source, verify, dump);
+      run(solver, G, source, rounds, verify, dump);
     }
   } else if (algorithm == bellman_ford) {
     Bellman_Ford solver(G);
     if (source == UINT_MAX) {
-      run(solver, G, verify, dump);
+      run(solver, G, sources, rounds, verify, dump);
     } else {
-      run(solver, G, source, verify, dump);
+      run(solver, G, source, rounds, verify, dump);
     }
   }
   return 0;

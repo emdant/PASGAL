@@ -45,3 +45,5 @@ perf*
 *.exe
 *.out
 *.app
+
+!compile_flags.txt

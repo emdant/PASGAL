@@ -2,6 +2,7 @@
 #ifndef GRAPH_H
 #define GRAPH_H
 
+#include <cstddef>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -21,9 +22,8 @@
 
 class Empty {};
 
-template <class NodeId, class EdgeTy>
-class WEdge {
- public:
+template <class NodeId, class EdgeTy> class WEdge {
+public:
   NodeId v;
   [[no_unique_address]] EdgeTy w;
   WEdge() {}
@@ -53,7 +53,7 @@ class WEdge {
 template <class _NodeId = uint32_t, class _EdgeId = uint64_t,
           class _EdgeTy = Empty>
 class Graph {
- public:
+public:
   using NodeId = _NodeId;
   using EdgeId = _EdgeId;
   using EdgeTy = _EdgeTy;
@@ -160,6 +160,51 @@ class Graph {
     }
   }
 
+  void read_weighted_gapbs_format(char const *filename) {
+    if constexpr (!std::is_same_v<_EdgeTy, Empty>)
+      weighted = true;
+    std::ifstream ifs(filename);
+    if (!ifs.is_open()) {
+      fprintf(stderr, "Error: file %s does not exist\n", filename);
+      exit(EXIT_FAILURE);
+    }
+    bool directed;
+    ifs.read(reinterpret_cast<char *>(&directed), sizeof(bool));
+    ifs.read(reinterpret_cast<char *>(&m), sizeof(size_t));
+    ifs.read(reinterpret_cast<char *>(&n), sizeof(size_t));
+    offsets = parlay::sequence<EdgeId>(n + 1);
+    edges = parlay::sequence<Edge>(m);
+    ifs.read(reinterpret_cast<char *>(offsets.begin()),
+             (n + 1) * sizeof(EdgeId));
+    if constexpr (!std::is_same_v<_EdgeTy, Empty>)
+      ifs.read(reinterpret_cast<char *>(edges.begin()), m * sizeof(Edge));
+    else {
+      for (size_t i = 0; i < m; i++) {
+        ifs.read(reinterpret_cast<char *>(edges.begin() + i), sizeof(Edge));
+        ifs.ignore(sizeof(Edge)); // ignore weight
+      }
+    }
+    if (directed) {
+      in_offsets = parlay::sequence<EdgeId>(n + 1);
+      in_edges = parlay::sequence<Edge>(m);
+      ifs.read(reinterpret_cast<char *>(in_offsets.begin()),
+               (n + 1) * sizeof(EdgeId));
+      if constexpr (!std::is_same_v<_EdgeTy, Empty>)
+        ifs.read(reinterpret_cast<char *>(in_edges.begin()), m * sizeof(Edge));
+      else {
+        for (size_t i = 0; i < m; i++) {
+          ifs.read(reinterpret_cast<char *>(edges.begin() + i), sizeof(Edge));
+          ifs.ignore(sizeof(Edge)); // ignore weight
+        }
+      }
+    }
+    if (ifs.peek() != EOF) {
+      fprintf(stderr, "Error: Bad data\n");
+      exit(EXIT_FAILURE);
+    }
+    ifs.close();
+  }
+
   void read_binary_format(char const *filename) {
     // Uses mmap to accelerate reading
     struct stat sb;
@@ -240,6 +285,9 @@ class Graph {
       read_pbbs_format(filename);
     } else if (subfix == "bin") {
       read_binary_format(filename);
+    } else if (subfix == "wsg") {
+      printf("Info: Reading weighted gapbs format\n");
+      read_weighted_gapbs_format(filename);
     } else {
       std::cerr << "Error: Invalid graph extension" << std::endl;
       abort();
@@ -394,7 +442,7 @@ class Graph {
     printf("Passed!\n");
   }
 
-  void generate_random_graph(size_t _n = 100000000, size_t _m = 8000000000) {
+  void generate_random_graph(size_t _n = 100000000, size_t _m = 80000000) {
     n = _n;
     m = _m;
     auto edgelist =
@@ -433,9 +481,8 @@ class Graph {
   }
 };
 
-template <class NodeId = uint32_t>
-class Forest {
- public:
+template <class NodeId = uint32_t> class Forest {
+public:
   size_t num_trees;
   Graph<NodeId, NodeId> G;
   parlay::sequence<NodeId> vertex;
@@ -472,8 +519,7 @@ Graph<NodeId, EdgeId, EdgeTy> edgelist2graph(
   return G;
 }
 
-template <class Graph>
-Graph make_symmetrized(const Graph &G) {
+template <class Graph> Graph make_symmetrized(const Graph &G) {
   size_t n = G.n;
   size_t m = G.m;
   using NodeId = typename Graph::NodeId;
@@ -503,8 +549,7 @@ Graph make_symmetrized(const Graph &G) {
   return edgelist2graph<NodeId, EdgeId, EdgeTy>(edgelist, n, edgelist.size());
 }
 
-template <class Graph>
-Graph Transpose(const Graph &G) {
+template <class Graph> Graph Transpose(const Graph &G) {
   size_t n = G.n;
   size_t m = G.m;
   using NodeId = typename Graph::NodeId;
@@ -520,4 +565,4 @@ Graph Transpose(const Graph &G) {
   return edgelist2graph<NodeId, EdgeId, EdgeTy>(edgelist, n, m);
 }
 
-#endif  // GRAPH_H
+#endif // GRAPH_H

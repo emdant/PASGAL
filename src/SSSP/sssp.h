@@ -1,5 +1,6 @@
 #pragma once
 #include <climits>
+#include <limits>
 
 #include "graph.h"
 #include "hashbag.h"
@@ -13,14 +14,12 @@ using namespace parlay;
 
 enum Algorithm { rho_stepping = 0, delta_stepping, bellman_ford };
 
-template <class Graph>
-class SSSP {
- protected:
+template <class Graph> class SSSP {
+protected:
   using NodeId = typename Graph::NodeId;
   using EdgeId = typename Graph::EdgeId;
   using EdgeTy = typename Graph::EdgeTy;
 
-  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
   static constexpr size_t LOCAL_QUEUE_SIZE = 128;
   static constexpr size_t BLOCK_SIZE = 1024;
   static constexpr size_t NUM_SAMPLES = 1024;
@@ -45,7 +44,7 @@ class SSSP {
           compare_and_swap(&in_next_frontier[v], false, true)) {
         bag.insert(v);
       }
-    } else {  // dense
+    } else { // dense
       if (!in_frontier[v] && !in_next_frontier[v]) {
         in_next_frontier[v] = true;
       }
@@ -184,7 +183,9 @@ class SSSP {
     pack_into_uninitialized(identity, in_frontier, frontier);
   }
 
- public:
+public:
+  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
+
   SSSP() = delete;
   SSSP(const Graph &_G) : G(_G), bag(G.n) {
     dist = sequence<EdgeTy>::uninitialized(G.n);
@@ -236,8 +237,7 @@ class SSSP {
   }
 };
 
-template <class Graph>
-class Rho_Stepping : public SSSP<Graph> {
+template <class Graph> class Rho_Stepping : public SSSP<Graph> {
   using NodeId = typename Graph::NodeId;
   using EdgeId = typename Graph::EdgeId;
   using EdgeTy = typename Graph::EdgeTy;
@@ -248,7 +248,6 @@ class Rho_Stepping : public SSSP<Graph> {
   using SSSP<Graph>::G;
   using SSSP<Graph>::in_frontier;
 
-  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
   static constexpr size_t NUM_SAMPLES = 1024;
 
   size_t rho;
@@ -284,13 +283,14 @@ class Rho_Stepping : public SSSP<Graph> {
     return sample_dist[id];
   }
 
- public:
+public:
+  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
+
   Rho_Stepping(const Graph &_G, size_t _rho = 1 << 20)
       : SSSP<Graph>(_G), rho(_rho) {}
 };
 
-template <class Graph>
-class Delta_Stepping : public SSSP<Graph> {
+template <class Graph> class Delta_Stepping : public SSSP<Graph> {
   using EdgeTy = typename Graph::EdgeTy;
 
   EdgeTy delta;
@@ -302,21 +302,19 @@ class Delta_Stepping : public SSSP<Graph> {
     return thres;
   }
 
- public:
+public:
   Delta_Stepping(const Graph &_G, EdgeTy _delta = 1 << 15)
       : SSSP<Graph>(_G), delta(_delta) {}
 };
 
-template <class Graph>
-class Bellman_Ford : public SSSP<Graph> {
+template <class Graph> class Bellman_Ford : public SSSP<Graph> {
   using NodeId = typename Graph::NodeId;
   using EdgeTy = typename Graph::EdgeTy;
-
-  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
 
   void init() override {}
   EdgeTy get_threshold() override { return DIST_MAX; }
 
- public:
+public:
+  static constexpr EdgeTy DIST_MAX = numeric_limits<EdgeTy>::max();
   Bellman_Ford(const Graph &_G) : SSSP<Graph>(_G) {}
 };

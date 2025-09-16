@@ -40,8 +40,15 @@ endif
 
 all: sssp dijkstra
 
-sssp:	sssp.cpp sssp.h dijkstra.h
-	$(CC) $(CPPFLAGS) $(INCLUDE_PATH) sssp.cpp -o sssp
+.PHONY: sssp
+
+sssp:	sssp-int32 sssp-float
+
+sssp-int32:	sssp.cpp sssp.h dijkstra.h
+	$(CC) $(CPPFLAGS) $(INCLUDE_PATH) sssp.cpp -o sssp-int32
+
+sssp-float:	sssp.cpp sssp.h dijkstra.h
+	$(CC) $(CPPFLAGS) $(INCLUDE_PATH) -DFLOAT sssp.cpp -o sssp-float
 
 dijkstra:	dijkstra.cpp dijkstra.h
 	$(CC) $(CPPFLAGS) $(INCLUDE_PATH) dijkstra.cpp -o dijkstra
