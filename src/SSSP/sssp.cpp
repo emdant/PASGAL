@@ -14,8 +14,8 @@ typedef float EdgeTy;
 #else
 typedef uint32_t EdgeTy;
 #endif
-constexpr int NUM_SRC = 1;
-constexpr int NUM_ROUND = 22;
+constexpr int NUM_SRC = 22;
+constexpr int NUM_ROUND = 1;
 constexpr int LOG2_WEIGHT = 18;
 constexpr int WEIGHT_RANGE = 1 << LOG2_WEIGHT;
 
@@ -31,7 +31,7 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
     printf("Round %d: %f\n", i, t.total_time());
     total_time += t.total_time();
   }
-  double average_time = total_time / NUM_ROUND;
+  double average_time = total_time / rounds;
   printf("Average time: %f\n", average_time);
 
   auto not_max_cmp = [&](EdgeTy a, EdgeTy b) {
@@ -46,8 +46,8 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
 
   auto longest_distance = *parlay::max_element(dist, not_max_cmp);
   auto reached = parlay::count_if(dist, not_max);
-  std::cout << "Longest distance: " << longest_distance << std::endl;
   std::cout << "Nodes reached: " << reached << std::endl;
+  std::cout << "Longest distance: " << longest_distance << std::endl;
 
   if (verify) {
     printf("Running verifier...\n");
@@ -67,17 +67,10 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
 }
 
 template <class Algo, class Graph>
-void run(Algo &algo, const Graph &G, int sources, int rounds, bool verify,
-         bool dump) {
-  std::mt19937_64 rng(27491095);
-  UniDist<NodeId, std::mt19937_64> udist(G.n - 1, rng);
-
+void run(Algo &algo, const Graph &G, SourcePicker<Graph, NodeId> &sp,
+         int sources, int rounds, bool verify, bool dump) {
   for (int v = 0; v < sources; v++) {
-    NodeId s, deg;
-    do {
-      s = udist();
-      deg = G.offsets[s + 1] - G.offsets[s];
-    } while (deg == 0);
+    NodeId s = sp.PickNext();
 
     printf("source %d: %-10d\n", v, s);
     run(algo, G, s, rounds, verify, dump);
@@ -97,7 +90,8 @@ int main(int argc, char *argv[]) {
             "\t-v,\tverify result\n"
             "\t-d,\tdump distances to file\n"
             "\t-S,\tnumber of sources\n"
-            "\t-n,\tnumber of trials per source\n",
+            "\t-n,\tnumber of trials per source\n"
+            "\t-z,\tsources input file\n",
             argv[0]);
     return 0;
   }
@@ -111,8 +105,9 @@ int main(int argc, char *argv[]) {
   bool dump = false;
   int rounds = NUM_ROUND;
   int sources = NUM_SRC;
+  std::string sources_path = "";
 
-  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:")) != -1) {
+  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:z:")) != -1) {
     switch (c) {
     case 'i':
       input_path = optarg;
@@ -150,6 +145,9 @@ int main(int argc, char *argv[]) {
     case 'S':
       sources = atoi(optarg);
       break;
+    case 'z':
+      sources_path = std::string(optarg);
+      break;
     default:
       std::cerr << "Error: Unknown option " << optopt << std::endl;
       abort();
@@ -173,6 +171,9 @@ int main(int argc, char *argv[]) {
           "Running on %s: |V|=%zu, |E|=%zu, num_src=%d, num_round=%d\n\n",
           input_path, G.n, G.m, sources, rounds);
 
+  SourcePicker<Graph<NodeId, EdgeId, EdgeTy>, NodeId> sp(G, sources_path,
+                                                         source);
+
   if (algorithm == rho_stepping) {
     size_t rho = 1 << 20;
     if (!parameter.empty()) {
@@ -180,11 +181,7 @@ int main(int argc, char *argv[]) {
       rho = stoull(parameter);
     }
     Rho_Stepping solver(G, rho);
-    if (source == UINT_MAX) {
-      run(solver, G, sources, rounds, verify, dump);
-    } else {
-      run(solver, G, source, rounds, verify, dump);
-    }
+    run(solver, G, sp, sources, rounds, verify, dump);
   } else if (algorithm == delta_stepping) {
     EdgeTy delta = 1 << 15;
     if (!parameter.empty()) {
@@ -195,18 +192,10 @@ int main(int argc, char *argv[]) {
       }
     }
     Delta_Stepping solver(G, delta);
-    if (source == UINT_MAX) {
-      run(solver, G, sources, rounds, verify, dump);
-    } else {
-      run(solver, G, source, rounds, verify, dump);
-    }
+    run(solver, G, sp, sources, rounds, verify, dump);
   } else if (algorithm == bellman_ford) {
     Bellman_Ford solver(G);
-    if (source == UINT_MAX) {
-      run(solver, G, sources, rounds, verify, dump);
-    } else {
-      run(solver, G, source, rounds, verify, dump);
-    }
+    run(solver, G, sp, sources, rounds, verify, dump);
   }
   return 0;
 }

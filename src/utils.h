@@ -2,8 +2,10 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <climits>
 #include <cstring>
 #include <iostream>
+#include <random>
 
 template <typename ET>
 inline bool atomic_compare_and_swap(ET *a, ET oldval, ET newval) {
@@ -109,6 +111,95 @@ private:
   bool no_mod_;
   uNodeID_ mod_;
   uNodeID_ cutoff_;
+};
+
+template <typename ValueT_> class VectorReader {
+  std::string filename_;
+
+public:
+  explicit VectorReader(std::string filename) : filename_(filename) {
+    if (filename == "") {
+      std::cout << "No sources filename given (Use -h for help)" << std::endl;
+      std::exit(-8);
+    }
+  }
+
+  std::vector<ValueT_> Read() {
+    std::ifstream file(filename_, std::ios::binary);
+    if (!file.is_open()) {
+      std::cout << "Couldn't open file " << filename_ << std::endl;
+      std::exit(-2);
+    }
+
+    std::vector<ValueT_> sources;
+    while (!file.eof()) {
+      ValueT_ source;
+      file >> source;
+      sources.push_back(source);
+    }
+    file.close();
+
+    return sources;
+  }
+
+  std::vector<ValueT_> ReadSerialized() {
+    std::ifstream file(filename_, std::ios::binary);
+    if (!file.is_open()) {
+      std::cout << "Couldn't open file " << filename_ << std::endl;
+      std::exit(-2);
+    }
+
+    std::vector<ValueT_> values;
+    int64_t num_values; // must be 64-bit value
+    file.read(reinterpret_cast<char *>(&num_values), sizeof(num_values));
+
+    values.resize(num_values);
+    file.read(reinterpret_cast<char *>(values.data()),
+              num_values * sizeof(ValueT_));
+    file.close();
+
+    return values;
+  }
+};
+
+template <typename GraphT_, typename NodeID_> class SourcePicker {
+public:
+  explicit SourcePicker(const GraphT_ &g, std::string filename = "",
+                        NodeID_ source = UINT_MAX)
+      : g_(g), given_source_(source), rng_(27491095), udist_(g.n - 1, rng_) {
+    if (filename != "") {
+      VectorReader<NodeID_> reader(filename);
+      file_sources_ = reader.Read();
+    }
+  }
+
+  NodeID_ PickNext() {
+    // Fixed source
+    if (given_source_ != UINT_MAX)
+      return given_source_;
+
+    // File sources
+    if (!file_sources_.empty()) {
+      static size_t current = 0;
+      return file_sources_[current++];
+    }
+
+    // Random sources
+    NodeID_ s, deg;
+    do {
+      s = udist_();
+      deg = g_.offsets[s + 1] - g_.offsets[s];
+    } while (deg == 0);
+
+    return s;
+  }
+
+private:
+  const GraphT_ &g_;
+  NodeID_ given_source_;
+  std::vector<NodeID_> file_sources_;
+  std::mt19937_64 rng_;
+  UniDist<NodeID_, std::mt19937_64> udist_;
 };
 
 #endif // UTILS_H
