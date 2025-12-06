@@ -374,6 +374,38 @@ public:
     });
   }
 
+  void replace_weights(std::vector<EdgeTy> weights) {
+    if constexpr (std::is_same_v<EdgeTy, Empty>) {
+      std::cerr << "Error: Graph instance does not have a edge weight field"
+                << std::endl;
+      abort();
+    }
+
+    parlay::parallel_for(0, m, [&](size_t i) { edges[i].w = weights[i]; });
+
+    if (!symmetrized) {
+      auto compare_node = [](const Edge &a, const Edge &b) {
+        return a.v < b.v;
+      };
+
+      parlay::parallel_for(0, n, [&](EdgeId u) {
+        parlay::parallel_for(offsets[u], offsets[u + 1], [&](EdgeId i) {
+          Edge e = edges[i];
+          NodeId v = e.v;
+          EdgeId vin_begin = in_offsets[v];
+          EdgeId vin_end = in_offsets[v + 1];
+
+          Edge dummy(u, 1);
+
+          auto it =
+              std::lower_bound(in_edges.data() + vin_begin,
+                               in_edges.data() + vin_end, dummy, compare_node);
+          (*it).w = e.w;
+        });
+      });
+    }
+  }
+
   void count_self_loop_and_parallel_edges() {
     size_t self_loops = 0, parallel_edges = 0;
     parlay::parallel_for(0, n, [&](size_t i) {

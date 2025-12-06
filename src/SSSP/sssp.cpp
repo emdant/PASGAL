@@ -91,7 +91,8 @@ int main(int argc, char *argv[]) {
             "\t-d,\tdump distances to file\n"
             "\t-S,\tnumber of sources\n"
             "\t-n,\tnumber of trials per source\n"
-            "\t-z,\tsources input file\n",
+            "\t-z,\tsources input file\n"
+            "\t-w,\tweights input file\n",
             argv[0]);
     return 0;
   }
@@ -106,8 +107,9 @@ int main(int argc, char *argv[]) {
   int rounds = NUM_ROUND;
   int sources = NUM_SRC;
   std::string sources_path = "";
+  std::string weights_path = "";
 
-  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:z:")) != -1) {
+  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:z:w:")) != -1) {
     switch (c) {
     case 'i':
       input_path = optarg;
@@ -148,6 +150,9 @@ int main(int argc, char *argv[]) {
     case 'z':
       sources_path = std::string(optarg);
       break;
+    case 'w':
+      weights_path = std::string(optarg);
+      break;
     default:
       std::cerr << "Error: Unknown option " << optopt << std::endl;
       abort();
@@ -162,7 +167,11 @@ int main(int argc, char *argv[]) {
   } else {
     G.read_graph(input_path);
   }
-  if (!G.weighted) {
+
+  if (weights_path != "") {
+    VectorReader<EdgeTy> reader(weights_path);
+    G.replace_weights(reader.ReadSerialized());
+  } else if (!G.weighted) {
     printf("Generating edge weights...\n");
     G.generate_random_weight(1, WEIGHT_RANGE);
   }
