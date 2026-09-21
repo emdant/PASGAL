@@ -305,6 +305,9 @@ template <class Graph> class Delta_Stepping : public SSSP<Graph> {
 public:
   Delta_Stepping(const Graph &_G, EdgeTy _delta = 1 << 15)
       : SSSP<Graph>(_G), delta(_delta) {}
+
+  // Lets the caller re-select delta between runs; see delta_from_c.h.
+  void set_delta(EdgeTy _delta) { delta = _delta; }
 };
 
 template <class Graph> class Bellman_Ford : public SSSP<Graph> {

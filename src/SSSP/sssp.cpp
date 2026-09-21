@@ -4,6 +4,7 @@
 #include <iostream>
 #include <random>
 
+#include "delta_from_c.h"
 #include "dijkstra.h"
 #include "graph.h"
 
@@ -20,12 +21,19 @@ constexpr int LOG2_WEIGHT = 18;
 constexpr int WEIGHT_RANGE = 1 << LOG2_WEIGHT;
 
 template <class Algo, class Graph, class NodeId = typename Graph::NodeId>
-void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
-         bool verify, bool dump) {
+void run(Algo &algo, const Graph &G, NodeId s, int rounds, bool verify,
+         bool dump, DeltaSelector<EdgeTy> &delta_selector) {
   double total_time = 0;
   sequence<EdgeTy> dist;
   for (int i = 0; i < rounds; i++) {
     internal::timer t;
+    // Inside the timed region, before sssp() initialises its state: see
+    // delta_from_c.h for how to move this out of the timer.
+    if constexpr (requires { algo.set_delta(EdgeTy{}); }) {
+      if (delta_selector.use_c()) {
+        algo.set_delta(delta_selector.get(G));
+      }
+    }
     dist = algo.sssp(s);
     t.stop();
     printf("Round %d: %f\n", i, t.total_time());
@@ -33,6 +41,7 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
   }
   double average_time = total_time / rounds;
   printf("Average time: %f\n", average_time);
+  delta_selector.print_last();
 
   auto not_max_cmp = [&](EdgeTy a, EdgeTy b) {
     if (b == Algo::DIST_MAX)
@@ -68,12 +77,13 @@ void run(Algo &algo, [[maybe_unused]] const Graph &G, NodeId s, int rounds,
 
 template <class Algo, class Graph>
 void run(Algo &algo, const Graph &G, SourcePicker<Graph, NodeId> &sp,
-         int sources, int rounds, bool verify, bool dump) {
+         int sources, int rounds, bool verify, bool dump,
+         DeltaSelector<EdgeTy> &delta_selector) {
   for (int v = 0; v < sources; v++) {
     NodeId s = sp.PickNext();
 
     printf("source %d: %-10d\n", v, s);
-    run(algo, G, s, rounds, verify, dump);
+    run(algo, G, s, rounds, verify, dump, delta_selector);
   }
 }
 
@@ -86,6 +96,9 @@ int main(int argc, char *argv[]) {
             "\t-i,\tinput file path\n"
             "\t-a,\talgorithm: [rho-stepping] [delta-stepping] [bellman-ford]\n"
             "\t-p,\tparameter(e.g. delta, rho)\n"
+            "\t-C,\tconstant C: delta-stepping derives its delta at run time\n"
+            "\t   \tas C * mean_edge_weight / average_degree (excludes -p)\n"
+            "\t-O,\tcompute the derived delta outside the timer\n"
             "\t-s,\tsymmetrized input graph\n"
             "\t-v,\tverify result\n"
             "\t-d,\tdump distances to file\n"
@@ -108,8 +121,11 @@ int main(int argc, char *argv[]) {
   int sources = NUM_SRC;
   std::string sources_path = "";
   std::string weights_path = "";
+  double delta_c = 0.0;
+  bool use_delta_c = false;
+  bool delta_outside_timer = false;
 
-  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:z:w:")) != -1) {
+  while ((c = getopt(argc, argv, "i:a:p:r:svdS:n:z:w:C:O")) != -1) {
     switch (c) {
     case 'i':
       input_path = optarg;
@@ -128,6 +144,13 @@ int main(int argc, char *argv[]) {
       break;
     case 'p':
       parameter = string(optarg);
+      break;
+    case 'C':
+      delta_c = atof(optarg);
+      use_delta_c = true;
+      break;
+    case 'O':
+      delta_outside_timer = true;
       break;
     case 'r':
       source = atol(optarg);
@@ -183,6 +206,11 @@ int main(int argc, char *argv[]) {
   SourcePicker<Graph<NodeId, EdgeId, EdgeTy>, NodeId> sp(G, sources_path,
                                                          source);
 
+  if (use_delta_c && !parameter.empty()) {
+    std::cerr << "Error: -C and -p are mutually exclusive" << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
   if (algorithm == rho_stepping) {
     size_t rho = 1 << 20;
     if (!parameter.empty()) {
@@ -190,7 +218,8 @@ int main(int argc, char *argv[]) {
       rho = stoull(parameter);
     }
     Rho_Stepping solver(G, rho);
-    run(solver, G, sp, sources, rounds, verify, dump);
+    DeltaSelector<EdgeTy> delta_selector;
+    run(solver, G, sp, sources, rounds, verify, dump, delta_selector);
   } else if (algorithm == delta_stepping) {
     EdgeTy delta = 1 << 15;
     if (!parameter.empty()) {
@@ -201,10 +230,14 @@ int main(int argc, char *argv[]) {
       }
     }
     Delta_Stepping solver(G, delta);
-    run(solver, G, sp, sources, rounds, verify, dump);
+    DeltaSelector<EdgeTy> delta_selector(delta, delta_c, use_delta_c,
+                                         delta_outside_timer);
+    delta_selector.warmup(G); // no-op unless -O
+    run(solver, G, sp, sources, rounds, verify, dump, delta_selector);
   } else if (algorithm == bellman_ford) {
     Bellman_Ford solver(G);
-    run(solver, G, sp, sources, rounds, verify, dump);
+    DeltaSelector<EdgeTy> delta_selector;
+    run(solver, G, sp, sources, rounds, verify, dump, delta_selector);
   }
   return 0;
 }
