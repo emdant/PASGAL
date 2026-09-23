@@ -194,6 +194,11 @@ public:
     in_next_frontier = sequence<atomic<bool>>::uninitialized(G.n);
   }
 
+  void reset_state() {
+    parallel_for(0, G.n, [&](NodeId i) { dist[i] = DIST_MAX; });
+    assert(bag.pack_into(make_slice(frontier)) == 0);
+  }
+
   sequence<EdgeTy> sssp(NodeId s) {
     if (!G.weighted) {
       fprintf(stderr, "Error: Input graph is unweighted\n");
@@ -202,7 +207,6 @@ public:
 
     init();
     parallel_for(0, G.n, [&](NodeId i) {
-      dist[i] = DIST_MAX;
       in_frontier[i] = in_next_frontier[i] = false;
     });
     assert(bag.pack_into(make_slice(frontier)) == 0);

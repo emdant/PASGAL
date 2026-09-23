@@ -26,6 +26,8 @@ void run(Algo &algo, const Graph &G, NodeId s, int rounds, bool verify,
   double total_time = 0;
   sequence<EdgeTy> dist;
   for (int i = 0; i < rounds; i++) {
+    algo.reset_state();
+
     internal::timer t;
     // Inside the timed region, before sssp() initialises its state: see
     // delta_from_c.h for how to move this out of the timer.
