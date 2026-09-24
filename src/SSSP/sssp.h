@@ -1,6 +1,7 @@
 #pragma once
 #include <climits>
 #include <limits>
+#include <new>
 
 #include "graph.h"
 #include "hashbag.h"
@@ -13,6 +14,51 @@ using namespace std;
 using namespace parlay;
 
 enum Algorithm { rho_stepping = 0, delta_stepping, bellman_ford };
+
+#ifdef __cpp_lib_hardware_interference_size
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC warns that the value follows -mtune; it only has to agree within this
+// binary.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winterference-size"
+#endif
+inline constexpr size_t kCacheLineSize = hardware_destructive_interference_size;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+#else
+inline constexpr size_t kCacheLineSize = 64;
+#endif
+
+// A vertex's distance, alone on its own cache line so that relaxations of
+// different vertices never falsely share one.
+template <class EdgeTy> struct alignas(kCacheLineSize) PaddedDist {
+  EdgeTy value;
+};
+
+// parlay::sequence carves its elements out of a raw byte buffer, which it
+// allocates without asking for any alignment, so the allocator must supply it.
+template <class T> struct CacheAlignedAllocator {
+  using value_type = T;
+
+  CacheAlignedAllocator() = default;
+  template <class U> CacheAlignedAllocator(const CacheAlignedAllocator<U> &) {}
+
+  T *allocate(size_t n) {
+    return static_cast<T *>(
+        ::operator new(n * sizeof(T), align_val_t{kCacheLineSize}));
+  }
+  void deallocate(T *p, size_t) {
+    ::operator delete(p, align_val_t{kCacheLineSize});
+  }
+
+  template <class U> bool operator==(const CacheAlignedAllocator<U> &) const {
+    return true;
+  }
+  template <class U> bool operator!=(const CacheAlignedAllocator<U> &) const {
+    return false;
+  }
+};
 
 template <class Graph> class SSSP {
 protected:
@@ -30,7 +76,7 @@ protected:
   bool sparse;
   size_t frontier_size;
   hashbag<NodeId> bag;
-  sequence<EdgeTy> dist;
+  sequence<PaddedDist<EdgeTy>, CacheAlignedAllocator<PaddedDist<EdgeTy>>> dist;
   sequence<NodeId> frontier;
   sequence<atomic<bool>> in_frontier;
   sequence<atomic<bool>> in_next_frontier;
@@ -67,20 +113,20 @@ protected:
   inline void visit_neighbors_sequential(NodeId u, NodeId *local_queue,
                                          size_t &rear) {
     if (G.symmetrized) {
-      EdgeTy min_dist = dist[u];
+      EdgeTy min_dist = dist[u].value;
       for (EdgeId i = G.offsets[u]; i < G.offsets[u + 1]; i++) {
         NodeId v = G.edges[i].v;
         EdgeTy w = G.edges[i].w;
-        if (dist[v] != DIST_MAX) {
-          min_dist = min(min_dist, dist[v] + w);
+        if (dist[v].value != DIST_MAX) {
+          min_dist = min(min_dist, dist[v].value + w);
         }
       }
-      write_min(&dist[u], min_dist);
+      write_min(&dist[u].value, min_dist);
     }
     for (EdgeId i = G.offsets[u]; i < G.offsets[u + 1]; i++) {
       NodeId v = G.edges[i].v;
       EdgeTy w = G.edges[i].w;
-      if (write_min(&dist[v], dist[u] + w)) {
+      if (write_min(&dist[v].value, dist[u].value + w)) {
         if (rear < LOCAL_QUEUE_SIZE) {
           local_queue[rear++] = v;
         } else {
@@ -94,22 +140,22 @@ protected:
     blocked_for(G.offsets[u], G.offsets[u + 1], BLOCK_SIZE,
                 [&](size_t, size_t start, size_t end) {
                   if (G.symmetrized) {
-                    EdgeTy min_dist = dist[u];
+                    EdgeTy min_dist = dist[u].value;
                     for (EdgeId i = start; i < end; i++) {
                       NodeId v = G.edges[i].v;
                       EdgeTy w = G.edges[i].w;
-                      if (dist[v] != DIST_MAX) {
-                        min_dist = min(min_dist, dist[v] + w);
+                      if (dist[v].value != DIST_MAX) {
+                        min_dist = min(min_dist, dist[v].value + w);
                       }
                     }
-                    if (write_min(&dist[u], min_dist)) {
+                    if (write_min(&dist[u].value, min_dist)) {
                       add_to_frontier(u);
                     }
                   }
                   for (EdgeId i = start; i < end; i++) {
                     NodeId v = G.edges[i].v;
                     EdgeTy w = G.edges[i].w;
-                    if (write_min(&dist[v], dist[u] + w)) {
+                    if (write_min(&dist[v].value, dist[u].value + w)) {
                       add_to_frontier(v);
                     }
                   }
@@ -125,7 +171,7 @@ protected:
         [&](size_t i) {
           NodeId f = frontier[i];
           in_frontier[f] = false;
-          if (dist[f] > threshold) {
+          if (dist[f].value > threshold) {
             add_to_frontier(f);
           } else {
             if (use_local_queue) {
@@ -134,7 +180,7 @@ protected:
               local_queue[rear++] = f;
               while (front < rear) {
                 NodeId u = local_queue[front++];
-                if (dist[u] > threshold) {
+                if (dist[u].value > threshold) {
                   add_to_frontier(u);
                   continue;
                 }
@@ -163,7 +209,7 @@ protected:
           [&](NodeId u) {
             if (in_frontier[u]) {
               in_frontier[u] = false;
-              if (dist[u] > threshold) {
+              if (dist[u].value > threshold) {
                 add_to_frontier(u);
               } else {
                 visit_neighbors_parallel(u);
@@ -188,7 +234,7 @@ public:
 
   SSSP() = delete;
   SSSP(const Graph &_G) : G(_G), bag(G.n) {
-    dist = sequence<EdgeTy>::uninitialized(G.n);
+    dist = decltype(dist)::uninitialized(G.n);
     frontier = sequence<NodeId>::uninitialized(G.n);
     in_frontier = sequence<atomic<bool>>::uninitialized(G.n);
     in_next_frontier = sequence<atomic<bool>>::uninitialized(G.n);
@@ -202,13 +248,13 @@ public:
 
     init();
     parallel_for(0, G.n, [&](NodeId i) {
-      dist[i] = DIST_MAX;
+      dist[i].value = DIST_MAX;
       in_frontier[i] = in_next_frontier[i] = false;
     });
     assert(bag.pack_into(make_slice(frontier)) == 0);
 
     frontier_size = 1;
-    dist[s] = 0;
+    dist[s].value = 0;
     frontier[0] = s;
     in_frontier[s] = true;
     sparse = true;
@@ -233,7 +279,8 @@ public:
       // printf("pack: %f\n", t.next_time());
       sparse = next_sparse;
     }
-    return dist;
+    // Hand back plain distances, as before, rather than the padded array.
+    return tabulate(G.n, [&](size_t i) { return dist[i].value; });
   }
 };
 
@@ -257,7 +304,7 @@ template <class Graph> class Rho_Stepping : public SSSP<Graph> {
     if (frontier_size <= rho) {
       if (sparse) {
         auto _dist = delayed_seq<EdgeTy>(
-            frontier_size, [&](size_t i) { return dist[frontier[i]]; });
+            frontier_size, [&](size_t i) { return dist[frontier[i]].value; });
         return *max_element(_dist);
       } else {
         return DIST_MAX;
@@ -267,11 +314,11 @@ template <class Graph> class Rho_Stepping : public SSSP<Graph> {
     for (size_t i = 0; i <= NUM_SAMPLES; i++) {
       if (sparse) {
         NodeId v = frontier[hash32(seed + i) % frontier_size];
-        sample_dist[i] = dist[v];
+        sample_dist[i] = dist[v].value;
       } else {
         NodeId v = hash32(seed + i) % G.n;
         if (in_frontier[v]) {
-          sample_dist[i] = dist[v];
+          sample_dist[i] = dist[v].value;
         } else {
           sample_dist[i] = DIST_MAX;
         }
