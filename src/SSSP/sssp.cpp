@@ -24,7 +24,9 @@ template <class Algo, class Graph, class NodeId = typename Graph::NodeId>
 void run(Algo &algo, const Graph &G, NodeId s, int rounds, bool verify,
          bool dump, DeltaSelector<EdgeTy> &delta_selector) {
   double total_time = 0;
-  sequence<EdgeTy> dist;
+  // Points into algo rather than holding a copy, so that no O(n) copy of the
+  // distances lands inside the timed region.
+  const sequence<EdgeTy> *result = nullptr;
   for (int i = 0; i < rounds; i++) {
     algo.reset_state();
 
@@ -36,11 +38,12 @@ void run(Algo &algo, const Graph &G, NodeId s, int rounds, bool verify,
         algo.set_delta(delta_selector.get(G));
       }
     }
-    dist = algo.sssp(s);
+    result = &algo.sssp(s);
     t.stop();
     printf("Round %d: %f\n", i, t.total_time());
     total_time += t.total_time();
   }
+  const sequence<EdgeTy> &dist = *result;
   double average_time = total_time / rounds;
   printf("Average time: %f\n", average_time);
   delta_selector.print_last();

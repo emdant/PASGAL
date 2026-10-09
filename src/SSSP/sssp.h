@@ -199,7 +199,7 @@ public:
     assert(bag.pack_into(make_slice(frontier)) == 0);
   }
 
-  sequence<EdgeTy> sssp(NodeId s) {
+  const sequence<EdgeTy> &sssp(NodeId s) {
     if (!G.weighted) {
       fprintf(stderr, "Error: Input graph is unweighted\n");
       exit(EXIT_FAILURE);
